@@ -159,3 +159,6 @@ dialog::backdrop { background: rgba(0,0,0,.6); }
 .bar-expected { position: absolute; top: -3px; bottom: -3px; width: 2px; background: #ffd75c; }
 .bar-count { color: var(--muted); font-variant-numeric: tabular-nums; text-align: right; }
 p.err { color: var(--danger); }
+
+button.generate { touch-action: manipulation; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+button.generate.held { transform: scale(.96); filter: brightness(1.25); }

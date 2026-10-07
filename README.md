@@ -20,8 +20,8 @@ python3 -m http.server 8000
 - **Without-replacement groups**: fields sharing the same "no-repeat group" label never repeat a combination. Used combinations persist between browser sessions. When a group is exhausted it restarts automatically, and each group can be reset manually.
 - **Import** a configuration from a URL, pasted JSON, or an `?import=<url>` link.
 - **Export** a configuration as JSON.
-- **Generate animation**: the output tiles flicker, then settle one by one within about a second. Reduced-motion preferences are respected.
-- Space or Enter triggers Generate on the run screen. The last 50 results are kept per configuration.
+- **Generate animation**: press and hold Generate (mouse, touch, or Space/Enter) and the output tiles spin; about a second after you release, they settle one by one. A quick tap gives a one-second spin. Reduced-motion preferences are respected.
+- The last 50 results are kept per configuration.
 
 ## Configuration JSON
 

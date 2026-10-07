@@ -293,58 +293,72 @@ function renderGroupInfo(st) {
   });
 }
 
-function onGenerate() {
-  if (rolling || !current) return;
-  const st = loadState(current.id);
-  st.sig = signature(current);
-  const { values, notes } = generate(current, st);
+// Hold Generate to spin; the result settles ~1s after release.
+let pressing = false;   // button/key currently held
+let released = null;    // timestamp of release, null while held
+let finals = null;      // result chosen at release
+
+function onPress() {
+  if (rolling || pressing || !current) return;
+  pressing = true; rolling = true; released = null; finals = null;
+  setMsg($('runMsg'), '');
+  $('genBtn').classList.add('held');
+  spin(current);
+}
+
+function onRelease() {
+  if (!pressing) return;
+  pressing = false;
+  $('genBtn').classList.remove('held');
+  const cfg = current;
+  const st = loadState(cfg.id);
+  st.sig = signature(cfg);
+  const { values, notes } = generate(cfg, st);
   st.history = [values, ...st.history].slice(0, 50);
   st.stats = st.stats || {};
   st.n = (st.n || 0) + 1;
   values.forEach((v, i) => { const s = st.stats[i] = st.stats[i] || {}; s[v] = (s[v] || 0) + 1; });
-  saveState(current.id, st); // persist immediately so a reload can't replay a value
-  setMsg($('runMsg'), '');
-  animate(values, () => {
-    renderHistory(st);
-    renderStats(st);
-    renderGroupInfo(st);
-    if (notes.length) setMsg($('runMsg'), notes.join(' '), 'ok');
-  });
+  saveState(cfg.id, st); // persist immediately so a reload can't replay a value
+  finals = { values, st, notes };
+  released = performance.now();
 }
 
-function animate(finals, done) {
-  rolling = true;
-  $('genBtn').disabled = true;
+function spin(cfg) {
   const tiles = Array.from($('tiles').children);
   const n = tiles.length;
   const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-  const start = performance.now();
-  const stopAt = tiles.map((_, i) => 650 + (n > 1 ? (i / (n - 1)) * 350 : 350)); // all settled within ~1s
+  const stopOffset = tiles.map((_, i) => 650 + (n > 1 ? (i / (n - 1)) * 350 : 350)); // after release; all settled within ~1s
   const lastSwap = tiles.map(() => 0);
   const settled = tiles.map(() => false);
   tiles.forEach(t => { t.classList.remove('landed'); t.classList.add('rolling'); });
 
   function frame(now) {
-    const dt = now - start;
+    const dt = released === null ? -1 : now - released;
     let pending = 0;
     tiles.forEach((t, i) => {
       if (settled[i]) return;
       const val = t.querySelector('.value');
-      if (dt >= stopAt[i] || reduce && dt >= 100) {
+      if (finals && (dt >= stopOffset[i] || reduce && dt >= 100)) {
         settled[i] = true;
-        val.textContent = finals[i];
+        val.textContent = finals.values[i];
         t.classList.remove('rolling');
         void t.offsetWidth; // restart pop animation
         t.classList.add('landed');
       } else {
         pending++;
-        // slow down the flicker as we approach the end
-        const gap = 40 + (dt / stopAt[i]) * 90;
-        if (now - lastSwap[i] > gap) { val.textContent = randomDisplay(current.fields[i]); lastSwap[i] = now; }
+        // flicker at full speed while held, then slow down as we approach the end
+        const gap = 40 + (dt < 0 ? 0 : (dt / stopOffset[i]) * 90);
+        if (now - lastSwap[i] > gap) { val.textContent = randomDisplay(cfg.fields[i]); lastSwap[i] = now; }
       }
     });
-    if (pending) requestAnimationFrame(frame);
-    else { rolling = false; $('genBtn').disabled = false; done(); }
+    if (pending) { requestAnimationFrame(frame); return; }
+    rolling = false;
+    if (current === cfg) {
+      renderHistory(finals.st);
+      renderStats(finals.st);
+      renderGroupInfo(finals.st);
+      if (finals.notes.length) setMsg($('runMsg'), finals.notes.join(' '), 'ok');
+    }
   }
   requestAnimationFrame(frame);
 }
@@ -486,7 +500,11 @@ async function importFromUrl(url) {
 }
 
 function onExport() {
-  const { id, ...rest } = current;
+  editing.name = $('cfgName').value;
+  let cfg;
+  try { cfg = normalise(editing); } catch (e) { return setMsg($('editMsg'), e.message, 'err'); }
+  setMsg($('editMsg'), '');
+  const { id, ...rest } = cfg;
   $('exportText').value = JSON.stringify(rest, null, 2);
   $('exportDlg').showModal();
 }
@@ -509,13 +527,16 @@ $('deleteBtn').onclick = () => {
   localStorage.removeItem(stateKey(editing.id));
   renderHome();
 };
-$('genBtn').onclick = onGenerate;
+$('genBtn').addEventListener('pointerdown', e => { if (e.button === 0 || e.pointerType !== 'mouse') { e.preventDefault(); onPress(); } });
+window.addEventListener('pointerup', onRelease);
+window.addEventListener('pointercancel', onRelease);
+$('genBtn').addEventListener('contextmenu', e => e.preventDefault());
 $('resetStats').onclick = () => {
   if (!current || rolling) return;
   const s = loadState(current.id); s.stats = {}; s.n = 0; saveState(current.id, s); renderStats(s);
 };
 $('runEdit').onclick = () => openEdit(current.id);
-$('runExport').onclick = onExport;
+$('exportBtn').onclick = onExport;
 $('closeExport').onclick = () => $('exportDlg').close();
 $('copyBtn').onclick = () => { $('exportText').select(); navigator.clipboard?.writeText($('exportText').value); };
 $('importUrlBtn').onclick = () => { const u = $('importUrl').value.trim(); if (u) importFromUrl(u); };
@@ -523,12 +544,10 @@ $('importTextBtn').onclick = () => {
   try { importObject(JSON.parse($('importText').value)); $('importText').value = ''; }
   catch (e) { setMsg($('importMsg'), 'Import failed: ' + e.message, 'err'); }
 };
-document.addEventListener('keydown', e => {
-  if ((e.key === ' ' || e.key === 'Enter') && !$('viewRun').classList.contains('hidden') &&
-      !/^(INPUT|TEXTAREA|SELECT|BUTTON)$/.test(document.activeElement.tagName)) {
-    e.preventDefault(); onGenerate();
-  }
-});
+const isGenKey = e => (e.key === ' ' || e.key === 'Enter') && !$('viewRun').classList.contains('hidden') &&
+  (document.activeElement === $('genBtn') || !/^(INPUT|TEXTAREA|SELECT|BUTTON)$/.test(document.activeElement.tagName));
+document.addEventListener('keydown', e => { if (isGenKey(e)) { e.preventDefault(); if (!e.repeat) onPress(); } });
+document.addEventListener('keyup', e => { if ((e.key === ' ' || e.key === 'Enter') && pressing) { e.preventDefault(); onRelease(); } });
 
 // Start: honour ?import=URL
 renderHome();
