@@ -453,3 +453,8 @@ if (params.get('import')) {
   $('importUrl').value = params.get('import');
   importFromUrl(params.get('import')).then(() => history.replaceState(null, '', location.pathname));
 }
+
+// PWA: offline support via service worker
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
+}
