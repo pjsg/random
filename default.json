@@ -1,0 +1,29 @@
+[
+  {
+    "name": "Yes/No",
+    "fields": [
+      {
+        "name": "Should we?",
+        "type": "list",
+        "group": "",
+        "values": [
+          "Yes",
+          "No"
+        ]
+      }
+    ]
+  },
+  {
+    "name": "Roll a die",
+    "fields": [
+      {
+        "name": "Spots",
+        "type": "number",
+        "group": "",
+        "min": 1,
+        "max": 6,
+        "step": 1
+      }
+    ]
+  }
+]

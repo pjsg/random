@@ -26,22 +26,12 @@
   <!-- Home / list -->
   <section id="viewHome">
     <div id="configList" class="cards"></div>
-    <div id="emptyMsg" class="muted hidden">No configurations yet. Create one, or import one below.</div>
-
-    <div class="panel">
-      <h2>Import a configuration</h2>
-      <div class="row">
-        <input id="importUrl" type="url" placeholder="https://example.com/config.json">
-        <button id="importUrlBtn">Import from URL</button>
-      </div>
-      <details>
-        <summary>…or paste JSON</summary>
-        <textarea id="importText" rows="8" placeholder='{"name":"Dinner","fields":[{"name":"Colour","type":"list","values":["Red","Blue"]}]}'></textarea>
-        <button id="importTextBtn">Import JSON</button>
-      </details>
-      <p class="muted small">Tip: share a link like <code>index.html?import=https://…/config.json</code> to import automatically. The server must allow cross-origin requests (CORS).</p>
-      <div id="importMsg" class="msg"></div>
+    <div id="emptyMsg" class="hidden">
+      <p class="muted">No configurations yet. Start from an example, or use <b>+ New configuration</b> to create or import one.</p>
+      <div id="defaultList" class="cards"></div>
     </div>
+
+    <div id="homeMsg" class="msg"></div>
   </section>
 
   <!-- Run -->
@@ -82,6 +72,24 @@
     </div>
   </section>
 </main>
+
+<dialog id="newDlg">
+  <h3>New configuration</h3>
+  <div class="row"><button id="newBlank" class="primary">Create from scratch</button></div>
+  <h4>…or import</h4>
+  <div class="row">
+    <input id="importUrl" type="url" placeholder="https://example.com/config.json">
+    <button id="importUrlBtn">Import from URL</button>
+  </div>
+  <details>
+    <summary>Paste JSON</summary>
+    <textarea id="importText" rows="8" placeholder='{"name":"Dinner","fields":[{"name":"Colour","type":"list","values":["Red","Blue"]}]}'></textarea>
+    <button id="importTextBtn">Import JSON</button>
+  </details>
+  <p class="muted small">Tip: share a link like <code>index.html?import=https://…/config.json</code> to import automatically. The server must allow cross-origin requests (CORS).</p>
+  <div id="importMsg" class="msg"></div>
+  <div class="row"><button id="closeNew">Cancel</button></div>
+</dialog>
 
 <dialog id="exportDlg">
   <h3>Configuration JSON</h3>

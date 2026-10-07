@@ -163,9 +163,11 @@ function summary(cfg) {
 }
 
 function renderHome() {
+  setMsg($('homeMsg'), '');
   const box = $('configList');
   box.textContent = '';
   $('emptyMsg').classList.toggle('hidden', configs.length > 0);
+  if (!configs.length) renderDefaults();
   configs.forEach(cfg => {
     const card = document.createElement('div');
     card.className = 'card';
@@ -384,6 +386,29 @@ function upsert(cfg) {
   saveConfigs(configs);
 }
 
+// ----- Defaults (offered when there are no saved configurations) -----
+let defaultsPromise = null;
+function loadDefaults() {
+  defaultsPromise = defaultsPromise || fetch('default.json')
+    .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+    .then(j => (Array.isArray(j) ? j : [j]).filter(o => { try { normalise(o); return true; } catch { return false; } }))
+    .catch(() => []);
+  return defaultsPromise;
+}
+async function renderDefaults() {
+  const box = $('defaultList');
+  box.textContent = '';
+  const list = await loadDefaults();
+  if (configs.length) return; // something was added while loading
+  list.forEach(def => {
+    const card = document.createElement('div'); card.className = 'card';
+    const h = document.createElement('h3'); h.textContent = def.name;
+    const b = document.createElement('button'); b.className = 'primary'; b.textContent = 'Create';
+    b.onclick = () => { const cfg = normalise({ ...def, id: undefined }); upsert(cfg); openRun(cfg.id); };
+    card.append(h, b); box.append(card);
+  });
+}
+
 // ----- Import / export -----
 function importObject(obj) {
   const arr = Array.isArray(obj) ? obj : [obj];
@@ -392,8 +417,9 @@ function importObject(obj) {
     upsert(cfg);
     return cfg.name;
   });
+  $('newDlg').close();
   renderHome();
-  setMsg($('importMsg'), `Imported: ${added.join(', ')}`, 'ok');
+  setMsg($('homeMsg'), `Imported: ${added.join(', ')}`, 'ok');
 }
 
 async function importFromUrl(url) {
@@ -415,7 +441,9 @@ function onExport() {
 
 // ---------- Wiring ----------
 $('homeLink').onclick = e => { e.preventDefault(); renderHome(); };
-$('newBtn').onclick = () => openEdit(null);
+$('newBtn').onclick = () => { setMsg($('importMsg'), ''); $('newDlg').showModal(); };
+$('newBlank').onclick = () => { $('newDlg').close(); openEdit(null); };
+$('closeNew').onclick = () => $('newDlg').close();
 $('addField').onclick = () => {
   editing.fields.push({ name: 'Field ' + (editing.fields.length + 1), type: 'number', min: 1, max: 100, step: 1, group: '' });
   renderFieldEditors();
@@ -451,7 +479,10 @@ renderHome();
 const params = new URLSearchParams(location.search);
 if (params.get('import')) {
   $('importUrl').value = params.get('import');
-  importFromUrl(params.get('import')).then(() => history.replaceState(null, '', location.pathname));
+  importFromUrl(params.get('import')).then(() => {
+    history.replaceState(null, '', location.pathname);
+    if ($('homeMsg').textContent === '') $('newDlg').showModal(); // failed: show the error
+  });
 }
 
 // PWA: offline support via service worker
