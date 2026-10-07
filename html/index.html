@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Random Machine</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <h1><a href="#" id="homeLink">🎲 Random Machine</a></h1>
+  <div class="top-actions">
+    <button id="newBtn" class="primary">+ New configuration</button>
+  </div>
+</header>
+
+<main>
+  <!-- Home / list -->
+  <section id="viewHome">
+    <div id="configList" class="cards"></div>
+    <div id="emptyMsg" class="muted hidden">No configurations yet. Create one, or import one below.</div>
+
+    <div class="panel">
+      <h2>Import a configuration</h2>
+      <div class="row">
+        <input id="importUrl" type="url" placeholder="https://example.com/config.json">
+        <button id="importUrlBtn">Import from URL</button>
+      </div>
+      <details>
+        <summary>…or paste JSON</summary>
+        <textarea id="importText" rows="8" placeholder='{"name":"Dinner","fields":[{"name":"Colour","type":"list","values":["Red","Blue"]}]}'></textarea>
+        <button id="importTextBtn">Import JSON</button>
+      </details>
+      <p class="muted small">Tip: share a link like <code>index.html?import=https://…/config.json</code> to import automatically. The server must allow cross-origin requests (CORS).</p>
+      <div id="importMsg" class="msg"></div>
+    </div>
+  </section>
+
+  <!-- Run -->
+  <section id="viewRun" class="hidden">
+    <div class="run-head">
+      <h2 id="runName"></h2>
+      <div class="row">
+        <button id="runEdit">Edit</button>
+        <button id="runExport">Export JSON</button>
+      </div>
+    </div>
+    <div id="tiles" class="tiles"></div>
+    <div class="center">
+      <button id="genBtn" class="generate">Generate</button>
+    </div>
+    <div id="runMsg" class="msg center"></div>
+    <div id="groupInfo" class="panel hidden"></div>
+    <div class="panel">
+      <h3>History</h3>
+      <ol id="history" class="history"></ol>
+    </div>
+  </section>
+
+  <!-- Edit -->
+  <section id="viewEdit" class="hidden">
+    <h2 id="editTitle">Configuration</h2>
+    <label class="block">Name
+      <input id="cfgName" type="text" placeholder="e.g. Weekend plan">
+    </label>
+    <div id="fieldEditors"></div>
+    <button id="addField">+ Add field</button>
+    <p class="muted small">Fields that share the same <b>no-repeat group</b> form one "without replacement" group: each combination of their values is only produced once, and the used combinations are remembered between sessions. Saving changes to a configuration resets its remembered history.</p>
+    <div id="editMsg" class="msg"></div>
+    <div class="row">
+      <button id="saveBtn" class="primary">Save</button>
+      <button id="cancelBtn">Cancel</button>
+      <button id="deleteBtn" class="danger">Delete</button>
+    </div>
+  </section>
+</main>
+
+<dialog id="exportDlg">
+  <h3>Configuration JSON</h3>
+  <textarea id="exportText" rows="14" readonly></textarea>
+  <div class="row">
+    <button id="copyBtn">Copy</button>
+    <button id="closeExport">Close</button>
+  </div>
+</dialog>
+
+<script src="app.js"></script>
+</body>
+</html>
