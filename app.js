@@ -190,7 +190,7 @@ function openRun(id) {
   current = configs.find(c => c.id === id);
   if (!current) return renderHome();
   const st = loadState(id);
-  if (st.sig !== signature(current)) { st.groups = {}; st.history = []; st.sig = signature(current); saveState(id, st); }
+  if (st.sig !== signature(current)) { st.groups = {}; st.history = []; st.stats = {}; st.n = 0; st.sig = signature(current); saveState(id, st); }
   $('runName').textContent = current.name;
   const tiles = $('tiles');
   tiles.textContent = '';
@@ -204,6 +204,7 @@ function openRun(id) {
   });
   setMsg($('runMsg'), '');
   renderHistory(st);
+  renderStats(st);
   renderGroupInfo(st);
   show('viewRun');
 }
@@ -219,6 +220,53 @@ function renderHistory(st) {
       const b = document.createElement('b'); b.textContent = v; li.append(b);
     });
     ol.append(li);
+  });
+}
+
+const MAX_STAT_ROWS = 60;
+function renderStats(st) {
+  const box = $('stats');
+  box.textContent = '';
+  const n = st.n || 0;
+  if (!n) { const p = document.createElement('p'); p.className = 'muted'; p.textContent = 'Nothing generated yet.'; box.append(p); return; }
+  current.fields.forEach((f, i) => {
+    const counts = (st.stats && st.stats[i]) || {};
+    const size = fieldSize(f);
+    const h = document.createElement('h4'); h.textContent = `${f.name} — ${n} generated`;
+    box.append(h);
+    if (size > MAX_STAT_ROWS) {
+      const p = document.createElement('p'); p.className = 'muted small';
+      const nums = Object.entries(counts).flatMap(([v, c]) => Array(c).fill(+v));
+      const mean = nums.reduce((a, b) => a + b, 0) / (nums.length || 1);
+      p.textContent = `${size.toLocaleString()} possible values, too many to chart.` +
+        (f.type === 'number' && nums.length ? ` Mean ${mean.toFixed(2)} (expected ${(f.min + (size - 1) * f.step / 2).toFixed(2)}).` : '');
+      box.append(p);
+      return;
+    }
+    const expected = n / size;
+    const rows = [];
+    for (let k = 0; k < size; k++) { const v = fieldValue(f, k); rows.push([v, counts[v] || 0]); }
+    const scale = Math.max(expected, ...rows.map(r => r[1])) || 1;
+    // chi-square statistic against a uniform distribution; flag if beyond ~p<0.01 (Wilson-Hilferty approx)
+    const chi = rows.reduce((s, r) => s + (r[1] - expected) ** 2 / expected, 0);
+    const df = size - 1;
+    const z = df > 0 ? (Math.cbrt(chi / df) - (1 - 2 / (9 * df))) / Math.sqrt(2 / (9 * df)) : 0;
+    const wrap = document.createElement('div'); wrap.className = 'bars';
+    rows.forEach(([v, c]) => {
+      const row = document.createElement('div'); row.className = 'bar-row';
+      const l = document.createElement('span'); l.className = 'bar-label'; l.textContent = v;
+      const track = document.createElement('div'); track.className = 'bar-track';
+      const fill = document.createElement('div'); fill.className = 'bar-fill'; fill.style.width = (c / scale * 100) + '%';
+      const mark = document.createElement('div'); mark.className = 'bar-expected'; mark.style.left = (expected / scale * 100) + '%';
+      track.append(fill, mark);
+      const t = document.createElement('span'); t.className = 'bar-count'; t.textContent = `${c} (${(c / n * 100).toFixed(1)}%)`;
+      row.append(l, track, t); wrap.append(row);
+    });
+    box.append(wrap);
+    const note = document.createElement('p'); note.className = 'small ' + (n >= 30 && z > 2.33 ? 'err' : 'muted');
+    note.textContent = `Fair share: ${(100 / size).toFixed(1)}% each (line on each bar).` +
+      (n < 30 ? ' Too few samples to judge bias yet.' : z > 2.33 ? ' This distribution looks unlikely for a fair generator (p < 0.01).' : ' Consistent with a fair generator.');
+    box.append(note);
   });
 }
 
@@ -251,10 +299,14 @@ function onGenerate() {
   st.sig = signature(current);
   const { values, notes } = generate(current, st);
   st.history = [values, ...st.history].slice(0, 50);
+  st.stats = st.stats || {};
+  st.n = (st.n || 0) + 1;
+  values.forEach((v, i) => { const s = st.stats[i] = st.stats[i] || {}; s[v] = (s[v] || 0) + 1; });
   saveState(current.id, st); // persist immediately so a reload can't replay a value
   setMsg($('runMsg'), '');
   animate(values, () => {
     renderHistory(st);
+    renderStats(st);
     renderGroupInfo(st);
     if (notes.length) setMsg($('runMsg'), notes.join(' '), 'ok');
   });
@@ -458,6 +510,10 @@ $('deleteBtn').onclick = () => {
   renderHome();
 };
 $('genBtn').onclick = onGenerate;
+$('resetStats').onclick = () => {
+  if (!current || rolling) return;
+  const s = loadState(current.id); s.stats = {}; s.n = 0; saveState(current.id, s); renderStats(s);
+};
 $('runEdit').onclick = () => openEdit(current.id);
 $('runExport').onclick = onExport;
 $('closeExport').onclick = () => $('exportDlg').close();
@@ -477,10 +533,13 @@ document.addEventListener('keydown', e => {
 // Start: honour ?import=URL
 renderHome();
 const params = new URLSearchParams(location.search);
+if (params.has('stats')) $('statsPanel').classList.remove('hidden'); // stats are hidden unless the URL has ?stats
 if (params.get('import')) {
   $('importUrl').value = params.get('import');
   importFromUrl(params.get('import')).then(() => {
-    history.replaceState(null, '', location.pathname);
+    params.delete('import');
+    const q = params.toString().replace(/=(&|$)/g, '$1'); // keep ?stats without a trailing '='
+    history.replaceState(null, '', location.pathname + (q ? '?' + q : ''));
     if ($('homeMsg').textContent === '') $('newDlg').showModal(); // failed: show the error
   });
 }

@@ -149,3 +149,13 @@ dialog::backdrop { background: rgba(0,0,0,.6); }
 @media (prefers-reduced-motion: reduce) {
   .tile.rolling .value, .tile.landed { animation: none; }
 }
+
+/* Stats */
+#stats h4 { margin: 14px 0 6px; color: var(--text); }
+.bar-row { display: grid; grid-template-columns: minmax(2.2em, 7em) 1fr 8.5em; gap: 8px; align-items: center; margin: 3px 0; font-size: .9rem; }
+.bar-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bar-track { position: relative; height: 14px; background: #12132b; border-radius: 7px; }
+.bar-fill { height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent2)); border-radius: 7px; transition: width .4s; }
+.bar-expected { position: absolute; top: -3px; bottom: -3px; width: 2px; background: #ffd75c; }
+.bar-count { color: var(--muted); font-variant-numeric: tabular-nums; text-align: right; }
+p.err { color: var(--danger); }
