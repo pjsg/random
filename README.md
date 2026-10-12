@@ -15,9 +15,10 @@ python3 -m http.server 8000
 ## Features
 
 - **Configurations** with a name and one or more fields, saved in the browser's localStorage.
-- **Numeric fields**: min, max and step (decimals are supported).
-- **List fields**: a set of values, e.g. Blue, Red, Green, Orange.
-- **Without-replacement groups**: fields sharing the same "no-repeat group" label never repeat a combination. Used combinations persist between browser sessions. When a group is exhausted it restarts automatically, and each group can be reset manually.
+- **Uniform numeric fields**: min, max and step (decimals are supported).
+- **Distributions**: normal, binomial, Poisson, exponential, geometric and triangular (see below).
+- **List fields**: a set of choices, e.g. Blue, Red, Green, Orange, optionally weighted (`2:Likely`, `1:Unlikely`).
+- **Without-replacement groups** (uniform and list fields only): fields sharing the same "no-repeat group" label never repeat a combination. Weighted choices are honoured: each combination's weight is the product of its values' weights. Used combinations persist between browser sessions. When a group is exhausted it restarts automatically, and each group can be reset manually.
 - **Import** a configuration from a URL, pasted JSON, or an `?import=<url>` link.
 - **Export** a configuration as JSON.
 - **Generate animation**: press and hold Generate (mouse, touch, or Space/Enter) and the output tiles spin; about a second after you release, they settle one by one. A quick tap gives a one-second spin. Reduced-motion preferences are respected.
@@ -39,10 +40,31 @@ python3 -m http.server 8000
 | Property | Applies to | Notes |
 | --- | --- | --- |
 | `name` | config, field | Required for the config. |
-| `type` | field | `"number"` or `"list"`. Inferred from `values` if omitted. |
-| `min`, `max`, `step` | number | Defaults 1, 100, 1. `step` must be > 0. |
-| `values` | list | Array of strings (or a comma/newline-separated string). |
-| `group` | field | Fields with the same label form one without-replacement group. |
+| `type` | field | `"number"` (uniform), `"list"`, `"normal"`, `"binomial"`, `"poisson"`, `"exponential"`, `"geometric"` or `"triangular"`. Inferred from `values` if omitted. |
+| `group` | number, list | Fields with the same label form one without-replacement group. |
+
+Parameters by type:
+
+| Type | Parameters | Output |
+| --- | --- | --- |
+| `number` | `min`, `max`, `step` (defaults 1, 100, 1) | Uniform over `min`, `min+step`, … ≤ `max` |
+| `list` | `values`: array of strings, or a comma/newline-separated string | One choice; `"w:Label"` gives it relative weight `w` (> 0, default 1) |
+| `normal` | `mean` (0), `sd` (1, > 0), `decimals` (2) | Bell curve rounded to `decimals` places (0 for integers) |
+| `binomial` | `trials` (10, 1–1000), `p` (0.5) | Number of successes in `trials` tries |
+| `poisson` | `mean` (4, 0–1000) | Count of events, e.g. arrivals per interval |
+| `exponential` | `mean` (1), `decimals` (2) | Waiting time between events |
+| `geometric` | `p` (0.5, > 0) | Number of tries until the first success (1, 2, 3, …) |
+| `triangular` | `min` (0), `mode` (5), `max` (10), `decimals` (2) | Between `min` and `max`, most likely near `mode` |
+
+A weight prefix is a number then a colon at the start of a choice, so a plain choice like `12:30` would be read as weight 12 for the choice `30`. Write `1:12:30` to get the literal choice `12:30`.
+
+Example weighted and distribution fields:
+
+```json
+{ "name": "Mood", "type": "list", "values": ["2:Likely", "1:Unlikely"] }
+{ "name": "Height (cm)", "type": "normal", "mean": 170, "sd": 10, "decimals": 0 }
+{ "name": "Heads in 10 flips", "type": "binomial", "trials": 10, "p": 0.5 }
+```
 
 A top-level `"groups": [["Colour", "Number"]]` (lists of field names) is also accepted as an alternative to per-field `group`.
 
