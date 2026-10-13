@@ -1,6 +1,6 @@
 'use strict';
 // Bump CACHE when any cached file changes so clients pick up the new version.
-const CACHE = 'random-machine-v9';
+const CACHE = 'random-machine-v12';
 const ASSETS = [
   './',
   'index.html',
@@ -11,7 +11,11 @@ const ASSETS = [
   'icons/icon-192.png',
   'icons/icon-512.png',
   'icons/icon-maskable-512.png',
-  'icons/apple-touch-icon.png'
+  'icons/apple-touch-icon.png',
+  'images/clubs.svg',
+  'images/hearts.svg',
+  'images/diamonds.svg',
+  'images/spades.svg'
 ];
 
 self.addEventListener('install', e => {

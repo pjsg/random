@@ -162,3 +162,11 @@ p.err { color: var(--danger); }
 
 button.generate { touch-action: manipulation; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
 button.generate.held { transform: scale(.96); filter: brightness(1.25); }
+
+/* Markdown choices */
+.field-ed label.check { display: flex; gap: 8px; align-items: flex-start; margin-top: 10px; }
+.field-ed label.check input { width: auto; margin-top: 4px; }
+.tile .value a { color: #8fd0ff; }
+.tile .value h1, .tile .value h2, .tile .value h3, .tile .value h4, .tile .value h5, .tile .value h6 { font: inherit; margin: 0; }
+.tile .value code { font-size: .7em; background: rgba(255,255,255,.12); padding: 0 .2em; border-radius: 4px; }
+.tile .value img, .history img { height: 1em; width: auto; max-width: 100%; vertical-align: -0.12em; }

@@ -183,8 +183,9 @@ function normalise(raw) {
         if (fieldSize(f) > 1e12) throw new Error(where + 'range is too large.');
         break;
       case 'list': {
+        if (r.markdown === true || r.markdown === 'true') f.markdown = true;
         let vals = r.values;
-        if (typeof vals === 'string') vals = vals.split(/[\n,]/);
+        if (typeof vals === 'string') vals = vals.split(f.markdown ? /\n/ : /[\n,]/);
         if (!Array.isArray(vals)) throw new Error(where + 'values must be a list.');
         f.values = vals.map(v => String(v).trim()).filter(v => v !== '');
         if (!f.values.length) throw new Error(where + 'needs at least one value.');
@@ -295,6 +296,94 @@ function generate(cfg, st) {
   return { values: result, notes };
 }
 
+// ---------- Markdown (for choices with "markdown": true) ----------
+// Inline Markdown plus a small, sanitised subset of HTML (so choices can have colours, links, etc.).
+// The sanitiser rebuilds the DOM from a whitelist, so imported configs can't inject scripts.
+const MD_TAGS = new Set(['A', 'B', 'STRONG', 'I', 'EM', 'U', 'S', 'DEL', 'CODE', 'MARK', 'SMALL', 'SUB', 'SUP', 'SPAN', 'BR', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'IMG']);
+const MD_STYLES = new Set(['color', 'background-color', 'font-size', 'font-weight', 'font-style', 'font-family', 'text-decoration', 'text-transform', 'letter-spacing', 'width', 'height', 'vertical-align']);
+
+function escapeHtml(s) { return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+
+function mdToHtml(src) {
+  const stash = [];
+  const hold = html => '\u0000' + (stash.push(html) - 1) + '\u0000';
+  let s = src.replace(/`([^`]+)`/g, (_, c) => hold('<code>' + escapeHtml(c) + '</code>'));
+  s = s.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, (_, alt, url) => '<img src="' + url.replace(/"/g, '%22') + '" alt="' + alt.replace(/"/g, '&quot;') + '">');
+  s = s.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (_, text, url) => '<a href="' + url.replace(/"/g, '%22') + '">' + text + '</a>');
+  s = s.replace(/<\/?[a-zA-Z][^>]*>/g, t => hold(t)); // keep tags (and their attributes) safe from emphasis rules
+  s = s.replace(/\*\*(.+?)\*\*|__(.+?)__/g, (_, x, y) => '<strong>' + (x ?? y) + '</strong>')
+       .replace(/~~(.+?)~~/g, '<s>$1</s>')
+       .replace(/\*(.+?)\*/g, '<em>$1</em>')
+       .replace(/(^|[^\w])_(.+?)_(?!\w)/g, '$1<em>$2</em>');
+  s = s.replace(/^(#{1,6})\s+(.*)$/, (_, h, t) => `<h${h.length}>${t}</h${h.length}>`);
+  return s.replace(/\u0000(\d+)\u0000/g, (_, n) => stash[+n]);
+}
+
+function cleanStyle(style) {
+  return style.split(';').map(d => {
+    const i = d.indexOf(':');
+    if (i < 0) return '';
+    const prop = d.slice(0, i).trim().toLowerCase(), val = d.slice(i + 1).trim();
+    return MD_STYLES.has(prop) && /^[#\w\s.,%()\-]+$/.test(val) && !/url|expression|var|attr|image/i.test(val) ? `${prop}:${val}` : '';
+  }).filter(Boolean).join(';');
+}
+
+function sanitizeInto(src, dest) {
+  for (const n of Array.from(src.childNodes)) {
+    if (n.nodeType === 3) { dest.append(document.createTextNode(n.nodeValue)); continue; }
+    if (n.nodeType !== 1) continue;
+    if (!MD_TAGS.has(n.tagName)) { // unknown tag: drop it, keep its text (but never script/style contents)
+      if (!/^(SCRIPT|STYLE|TEMPLATE|NOSCRIPT)$/.test(n.tagName)) sanitizeInto(n, dest);
+      continue;
+    }
+    const el = document.createElement(n.tagName.toLowerCase());
+    const style = n.getAttribute('style');
+    if (style) { const c = cleanStyle(style); if (c) el.setAttribute('style', c); }
+    if (n.tagName === 'A') {
+      const href = (n.getAttribute('href') || '').trim();
+      if (/^(https?:|mailto:|tel:)/i.test(href)) {
+        try { el.setAttribute('href', new URL(href).href); el.target = '_blank'; el.rel = 'noopener noreferrer'; } catch { /* ignore bad URL */ }
+      }
+    }
+    if (n.tagName === 'IMG') {
+      // https, embedded data:image, or a relative path on this site; never http, javascript:, or protocol-relative URLs
+      const src = (n.getAttribute('src') || '').trim();
+      const ok = /^https:\/\//i.test(src) || /^data:image\/(png|jpe?g|gif|webp|svg\+xml)[;,]/i.test(src) ||
+        (!/^[a-z][a-z0-9+.-]*:/i.test(src) && !/^[\\/]{2}/.test(src) && src !== '');
+      if (!ok) continue;
+      el.setAttribute('src', src);
+      el.alt = n.getAttribute('alt') || '';
+      el.referrerPolicy = 'no-referrer';
+      for (const dim of ['width', 'height']) { const v = n.getAttribute(dim); if (/^\d{1,4}$/.test(v || '')) el.setAttribute(dim, v); }
+    }
+    sanitizeInto(n, el);
+    dest.append(el);
+  }
+}
+
+const mdCache = new Map();
+function renderMarkdown(src) { // returns a fresh DocumentFragment
+  let tpl = mdCache.get(src);
+  if (!tpl) {
+    tpl = document.createDocumentFragment();
+    sanitizeInto(new DOMParser().parseFromString('<body>' + mdToHtml(src), 'text/html').body, tpl);
+    if (mdCache.size > 500) mdCache.clear();
+    mdCache.set(src, tpl);
+  }
+  return tpl.cloneNode(true);
+}
+function plainText(src) {
+  const frag = renderMarkdown(src);
+  frag.querySelectorAll('img').forEach(img => img.replaceWith(img.alt || '[image]'));
+  return frag.textContent;
+}
+
+// Show a field's value (rendered as Markdown if the field asks for it).
+function setValue(el, f, text) {
+  if (f.markdown) el.replaceChildren(renderMarkdown(text));
+  else el.textContent = text;
+}
+
 // ---------- Views ----------
 let configs = loadConfigs();
 let current = null;   // config being run / edited
@@ -369,7 +458,7 @@ function renderHistory(st) {
     const li = document.createElement('li');
     h.forEach((v, i) => {
       if (i) li.append(' · ');
-      const b = document.createElement('b'); b.textContent = v; li.append(b);
+      const b = document.createElement('b'); setValue(b, current.fields[i], v); li.append(b);
     });
     ol.append(li);
   });
@@ -430,7 +519,7 @@ function renderStats(st) {
       const wrap = document.createElement('div'); wrap.className = 'bars';
       data.forEach(d => {
         const row = document.createElement('div'); row.className = 'bar-row';
-        const l = document.createElement('span'); l.className = 'bar-label'; l.textContent = d.label;
+        const l = document.createElement('span'); l.className = 'bar-label'; l.textContent = f.markdown ? plainText(d.label) : d.label;
         const track = document.createElement('div'); track.className = 'bar-track';
         const fill = document.createElement('div'); fill.className = 'bar-fill'; fill.style.width = (d.c / scale * 100) + '%';
         track.append(fill);
@@ -562,7 +651,7 @@ function spin(cfg) {
       const val = t.querySelector('.value');
       if (finals && (dt >= stopOffset[i] || reduce && dt >= 100)) {
         settled[i] = true;
-        val.textContent = finals.values[i];
+        setValue(val, cfg.fields[i], finals.values[i]);
         t.classList.remove('rolling');
         void t.offsetWidth; // restart pop animation
         t.classList.add('landed');
@@ -570,7 +659,7 @@ function spin(cfg) {
         pending++;
         // flicker at full speed while held, then slow down as we approach the end
         const gap = 40 + (dt < 0 ? 0 : (dt / stopOffset[i]) * 90);
-        if (now - lastSwap[i] > gap) { val.textContent = randomDisplay(cfg.fields[i]); lastSwap[i] = now; }
+        if (now - lastSwap[i] > gap) { setValue(val, cfg.fields[i], randomDisplay(cfg.fields[i])); lastSwap[i] = now; }
       }
     });
     if (pending) { requestAnimationFrame(frame); return; }
@@ -606,6 +695,31 @@ function openEdit(id) {
   show('viewEdit');
 }
 
+// ----- Pasting / dropping images into a Markdown choices box -----
+function fileToDataUrl(file) {
+  return new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = () => rej(r.error); r.readAsDataURL(file); });
+}
+const MAX_IMAGE_CHARS = 300000;
+// Downscale raster images (choice images are small); keep SVG and animated GIF as they are.
+async function imageToDataUrl(file, max = 256) {
+  let out;
+  if (file.type === 'image/svg+xml' || file.type === 'image/gif') out = await fileToDataUrl(file);
+  else {
+    const objUrl = URL.createObjectURL(file);
+    try {
+      const img = new Image(); img.src = objUrl; await img.decode();
+      const k = Math.min(1, max / Math.max(img.naturalWidth, img.naturalHeight));
+      const c = document.createElement('canvas');
+      c.width = Math.max(1, Math.round(img.naturalWidth * k)); c.height = Math.max(1, Math.round(img.naturalHeight * k));
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      out = c.toDataURL('image/png');
+      if (out.length > 60000) { const w = c.toDataURL('image/webp', 0.85); if (w.startsWith('data:image/webp') && w.length < out.length) out = w; }
+    } finally { URL.revokeObjectURL(objUrl); }
+  }
+  if (out.length > MAX_IMAGE_CHARS) throw new Error(`Image is too large (${Math.round(out.length / 1024)} KB after processing; the limit is ${Math.round(MAX_IMAGE_CHARS / 1024)} KB).`);
+  return out;
+}
+
 function renderFieldEditors() {
   const box = $('fieldEditors');
   box.textContent = '';
@@ -623,13 +737,22 @@ function renderFieldEditors() {
       </div>
       <div class="params grid3"></div>
       <div class="lst">
-        <label style="margin-top:10px">Choices (one per line, or comma separated). Optional weight prefix, e.g. <code>2:Likely</code> and <code>1:Unlikely</code>.<textarea class="f-values" rows="4" placeholder="2:Likely&#10;1:Unlikely"></textarea></label>
+        <label style="margin-top:10px"><span class="lst-help"></span> Optional weight prefix, e.g. <code>2:Likely</code> and <code>1:Unlikely</code>.<textarea class="f-values" rows="4" placeholder="2:Likely&#10;1:Unlikely"></textarea></label>
+        <label class="check"><input type="checkbox" class="f-md"> Render choices as Markdown (one choice per line). Supports **bold**, *italic*, [links](https://example.com) and colours such as &lt;span style="color:red"&gt;red&lt;/span&gt;.</label>
       </div>`;
     const q = s => w.querySelector(s);
     q('.f-name').value = f.name;
     q('.f-type').value = f.type;
     q('.f-group').value = f.group || '';
     q('.f-values').value = (f.values || []).join('\n');
+    q('.f-md').checked = !!f.markdown;
+    const splitter = () => (f.markdown ? /\n/ : /[\n,]/);
+    const syncMd = () => {
+      q('.f-md').checked = !!f.markdown;
+      q('.lst-help').textContent = f.markdown ? 'Choices (one per line).' : 'Choices (one per line, or comma separated).';
+      q('.f-values').wrap = f.markdown ? 'off' : 'soft'; // long data: URLs stay on one line
+    };
+    syncMd();
     q('.grp').classList.toggle('hidden', !spec.indexed);
     q('.lst').classList.toggle('hidden', f.type !== 'list');
     spec.params.forEach(([key, label]) => {
@@ -650,7 +773,30 @@ function renderFieldEditors() {
       if (f.type === 'list' && !(f.values || []).length) f.values = ['2:Likely', '1:Unlikely'];
       renderFieldEditors();
     };
-    q('.f-values').oninput = e => f.values = e.target.value.split(/[\n,]/);
+    q('.f-values').oninput = e => f.values = e.target.value.split(splitter());
+    q('.f-md').onchange = e => {
+      f.markdown = e.target.checked;
+      f.values = q('.f-values').value.split(splitter());
+      syncMd();
+    };
+    // Paste (or drop) an image into the choices: it is shrunk and inserted as a data: URL.
+    const ta = q('.f-values');
+    const takeImages = e => {
+      const dt = e.clipboardData || e.dataTransfer;
+      const files = Array.from((dt && dt.files) || []).filter(x => x.type.startsWith('image/'));
+      if (!files.length) return; // ordinary text paste/drop
+      e.preventDefault();
+      if (!f.markdown) { f.markdown = true; syncMd(); } // images need Markdown (and its newline-only splitting)
+      files.reduce((p, file) => p.then(async () => {
+        const url = await imageToDataUrl(file);
+        ta.setRangeText(`![image](${url})`, ta.selectionStart, ta.selectionEnd, 'end');
+        f.values = ta.value.split(splitter());
+        setMsg($('editMsg'), `Image added (${Math.round(url.length / 1024)} KB). Give it a better description by editing the text inside [ ].`, 'ok');
+      }), Promise.resolve()).catch(err => setMsg($('editMsg'), err.message || 'Could not add that image.', 'err'));
+    };
+    ta.addEventListener('paste', takeImages);
+    ta.addEventListener('drop', takeImages);
+    ta.addEventListener('dragover', e => { if (e.dataTransfer && Array.from(e.dataTransfer.types).includes('Files')) e.preventDefault(); });
     q('.rm').onclick = () => { if (editing.fields.length > 1) { editing.fields.splice(i, 1); renderFieldEditors(); } };
     q('.up').onclick = () => { if (i > 0) { [editing.fields[i - 1], editing.fields[i]] = [f, editing.fields[i - 1]]; renderFieldEditors(); } };
     q('.down').onclick = () => { if (i < editing.fields.length - 1) { [editing.fields[i + 1], editing.fields[i]] = [f, editing.fields[i + 1]]; renderFieldEditors(); } };

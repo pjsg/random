@@ -48,7 +48,7 @@ Parameters by type:
 | Type | Parameters | Output |
 | --- | --- | --- |
 | `number` | `min`, `max`, `step` (defaults 1, 100, 1) | Uniform over `min`, `min+step`, … ≤ `max` |
-| `list` | `values`: array of strings, or a comma/newline-separated string | One choice; `"w:Label"` gives it relative weight `w` (> 0, default 1) |
+| `list` | `values`: array of strings, or a comma/newline-separated string; optional `markdown` (boolean) | One choice; `"w:Label"` gives it relative weight `w` (> 0, default 1) |
 | `normal` | `mean` (0), `sd` (1, > 0), `decimals` (2) | Bell curve rounded to `decimals` places (0 for integers) |
 | `binomial` | `trials` (10, 1–1000), `p` (0.5) | Number of successes in `trials` tries |
 | `poisson` | `mean` (4, 0–1000) | Count of events, e.g. arrivals per interval |
@@ -57,6 +57,19 @@ Parameters by type:
 | `triangular` | `min` (0), `mode` (5), `max` (10), `decimals` (2) | Between `min` and `max`, most likely near `mode` |
 
 A weight prefix is a number then a colon at the start of a choice, so a plain choice like `12:30` would be read as weight 12 for the choice `30`. Write `1:12:30` to get the literal choice `12:30`.
+
+### Markdown choices
+
+Set `"markdown": true` on a list field (the "Render choices as Markdown" checkbox in the editor) to render each choice as Markdown. In this mode a string `values` is split on newlines only, so choices can contain commas. Supported:
+
+- `**bold**`, `*italic*`, `~~strikethrough~~`, `` `code` ``, `# heading`
+- `[links](https://example.com)` (http, https, mailto and tel only; opened in a new tab)
+- A safe subset of HTML for things like colour: `<span style="color:red">Red</span>`. Allowed tags are `a b strong i em u s del code mark small sub sup span br img h1`–`h6`. Allowed style properties are `color`, `background-color`, `font-size`, `font-weight`, `font-style`, `font-family`, `text-decoration`, `text-transform`, `letter-spacing`, `width`, `height` and `vertical-align`. Everything else (scripts, event handlers, `url(...)`) is stripped, so imported configurations can't run code.
+- Images: `![Hearts](https://example.com/hearts.svg)` or `<img src="…" alt="Hearts">`. The `src` may be an `https://` URL, an embedded `data:image/…` URI, or a relative path to a file served with the app (e.g. `images/hearts.svg`). Plain `http://` is refused. Images default to the height of the text; override with `<img … style="height:2em">`. Remote images are fetched without a referrer, but the image host can still see the viewer's IP, so only import configurations you trust. Relative images aren't available offline unless added to the cache list in [sw.js](sw.js).
+
+- Pasting images: paste (or drag and drop) an image file into a list field's choices box and it is inserted as `![image](data:…)`. Raster images are shrunk to at most 256 px and kept under about 300 KB; SVG and GIF are embedded as-is. Pasting turns Markdown on for that field. Embedded images are stored in the configuration itself (browser storage is limited to a few MB in total), so prefer small images.
+
+Weights still work: `3:<span style="color:green">Go</span>`.
 
 Example weighted and distribution fields:
 
@@ -94,3 +107,4 @@ The app works offline once loaded. A service worker ([sw.js](sw.js)) caches the 
 - [style.css](style.css): styling and animations
 - [app.js](app.js): storage, generation, editor and import/export
 - [manifest.webmanifest](manifest.webmanifest), [sw.js](sw.js), [icons/](icons/): PWA install and offline support
+- [images/](images/): suit icons used by the "Draw a card" example

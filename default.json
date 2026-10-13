@@ -54,11 +54,12 @@
         "type": "list",
         "group": "A",
         "values": [
-          "♧",
-          "♡",
-          "♢",
-          "♤"
-        ]
+          "![Clubs](images/clubs.svg)",
+          "![Hearts](images/hearts.svg)",
+          "![Diamonds](images/diamonds.svg)",
+          "![Spades](images/spades.svg)"
+        ],
+        "markdown": true
       }
     ]
   }
