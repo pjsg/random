@@ -89,6 +89,13 @@
 <dialog id="newDlg">
   <h3>New configuration</h3>
   <div class="row"><button id="newBlank" class="primary">Create from scratch</button></div>
+  <div id="defaultRow" class="hidden">
+    <h4>…or add an example</h4>
+    <div class="row">
+      <select id="defaultSelect" aria-label="Example configurations"></select>
+      <button id="addDefault">Add</button>
+    </div>
+  </div>
   <h4>…or import</h4>
   <div class="row">
     <input id="importUrl" type="url" placeholder="https://example.com/config.json">

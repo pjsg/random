@@ -1,6 +1,6 @@
 'use strict';
 // Bump CACHE when any cached file changes so clients pick up the new version.
-const CACHE = 'random-machine-v12';
+const CACHE = 'random-machine-v14';
 const ASSETS = [
   './',
   'index.html',

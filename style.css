@@ -59,7 +59,7 @@ label.block { display: block; margin-bottom: 14px; color: var(--muted); }
 label.block input, label.block textarea, label.block select { margin-top: 4px; color: var(--text); }
 
 .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 10px 0; }
-.row > input { flex: 1; min-width: 200px; width: auto; }
+.row > input, .row > select { flex: 1; min-width: 200px; width: auto; }
 .panel {
   background: var(--panel); border: 1px solid var(--border);
   border-radius: 14px; padding: 16px 18px; margin-top: 22px;

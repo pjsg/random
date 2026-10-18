@@ -830,7 +830,7 @@ function loadDefaults() {
   defaultsPromise = defaultsPromise || fetch('default.json')
     .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
     .then(j => (Array.isArray(j) ? j : [j]).filter(o => { try { normalise(o); return true; } catch { return false; } }))
-    .catch(() => []);
+    .catch(() => { defaultsPromise = null; return []; }); // don't remember a failure
   return defaultsPromise;
 }
 async function renderDefaults() {
@@ -845,6 +845,14 @@ async function renderDefaults() {
     b.onclick = () => { const cfg = normalise({ ...def, id: undefined }); upsert(cfg); openRun(cfg.id); };
     card.append(h, b); box.append(card);
   });
+}
+
+async function fillDefaultSelect() {
+  const list = await loadDefaults();
+  const sel = $('defaultSelect');
+  sel.textContent = '';
+  list.forEach((d, i) => { const o = document.createElement('option'); o.value = i; o.textContent = d.name; sel.append(o); });
+  $('defaultRow').classList.toggle('hidden', !list.length);
 }
 
 // ----- Import / export -----
@@ -883,7 +891,16 @@ function onExport() {
 
 // ---------- Wiring ----------
 $('homeLink').onclick = e => { e.preventDefault(); renderHome(); };
-$('newBtn').onclick = () => { setMsg($('importMsg'), ''); $('newDlg').showModal(); };
+$('newBtn').onclick = () => { setMsg($('importMsg'), ''); fillDefaultSelect(); $('newDlg').showModal(); };
+$('addDefault').onclick = async () => {
+  const def = (await loadDefaults())[$('defaultSelect').value];
+  if (!def) return;
+  const cfg = normalise({ ...def, id: undefined });
+  upsert(cfg);
+  $('newDlg').close();
+  renderHome();
+  setMsg($('homeMsg'), `Added: ${cfg.name}`, 'ok');
+};
 $('newBlank').onclick = () => { $('newDlg').close(); openEdit(null); };
 $('closeNew').onclick = () => $('newDlg').close();
 $('addField').onclick = () => {
@@ -938,4 +955,9 @@ if (params.get('import')) {
 // PWA: offline support via service worker
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
+  // When an updated service worker takes over, reload once so the new files are used straight away.
+  if (navigator.serviceWorker.controller) {
+    let reloaded = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => { if (!reloaded && !rolling && !pressing && $('viewEdit').classList.contains('hidden')) { reloaded = true; location.reload(); } });
+  }
 }
