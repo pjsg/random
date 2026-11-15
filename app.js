@@ -603,6 +603,7 @@ function renderGroupInfo(st) {
 let pressing = false;   // button/key currently held
 let released = null;    // timestamp of release, null while held
 let finals = null;      // result chosen at release
+let shakeHeld = false;  // current press was started by shaking the device
 
 function onPress() {
   if (rolling || pressing || !current) return;
@@ -916,9 +917,9 @@ $('deleteBtn').onclick = () => {
   localStorage.removeItem(stateKey(editing.id));
   renderHome();
 };
-$('genBtn').addEventListener('pointerdown', e => { if (e.button === 0 || e.pointerType !== 'mouse') { e.preventDefault(); onPress(); } });
-window.addEventListener('pointerup', onRelease);
-window.addEventListener('pointercancel', onRelease);
+$('genBtn').addEventListener('pointerdown', e => { if (e.button === 0 || e.pointerType !== 'mouse') { e.preventDefault(); enableShake(); onPress(); } });
+window.addEventListener('pointerup', () => { if (!shakeHeld) onRelease(); });
+window.addEventListener('pointercancel', () => { if (!shakeHeld) onRelease(); });
 $('genBtn').addEventListener('contextmenu', e => e.preventDefault());
 $('resetStats').onclick = () => {
   if (!current || rolling) return;
@@ -937,6 +938,56 @@ const isGenKey = e => (e.key === ' ' || e.key === 'Enter') && !$('viewRun').clas
   (document.activeElement === $('genBtn') || !/^(INPUT|TEXTAREA|SELECT|BUTTON)$/.test(document.activeElement.tagName));
 document.addEventListener('keydown', e => { if (isGenKey(e)) { e.preventDefault(); if (!e.repeat) onPress(); } });
 document.addEventListener('keyup', e => { if ((e.key === ' ' || e.key === 'Enter') && pressing) { e.preventDefault(); onRelease(); } });
+
+// ----- Shake to roll -----
+// Vigorous shaking acts like holding Generate: the tiles spin while shaking and settle once it stops.
+const SHAKE_JOLT = 15;      // m/s² of acceleration (gravity removed) that counts as a jolt
+const SHAKE_JOLTS = 3;      // jolts needed within SHAKE_WINDOW to start a roll
+const SHAKE_WINDOW = 800;   // ms
+const SHAKE_QUIET = 400;    // ms without a jolt that ends the shake
+let shakeOn = false, shakeAsked = false, jolts = [], lastJolt = 0, shakeTimer = null;
+let grav = null;            // low-pass gravity estimate when only accelerationIncludingGravity is available
+
+function enableShake() { // must be called from a user gesture (iOS permission prompt)
+  if (shakeOn || shakeAsked || typeof DeviceMotionEvent === 'undefined') return;
+  shakeAsked = true;
+  const start = () => { shakeOn = true; window.addEventListener('devicemotion', onMotion); };
+  if (typeof DeviceMotionEvent.requestPermission === 'function') {
+    DeviceMotionEvent.requestPermission().then(r => { if (r === 'granted') start(); }).catch(() => {});
+  } else start();
+}
+
+function onMotion(e) {
+  let x, y, z;
+  const a = e.acceleration;
+  if (a && a.x !== null) { x = a.x; y = a.y; z = a.z; }
+  else {
+    const g = e.accelerationIncludingGravity;
+    if (!g || g.x === null) return;
+    if (!grav) grav = { x: g.x, y: g.y, z: g.z };
+    grav.x = 0.8 * grav.x + 0.2 * g.x; grav.y = 0.8 * grav.y + 0.2 * g.y; grav.z = 0.8 * grav.z + 0.2 * g.z;
+    x = g.x - grav.x; y = g.y - grav.y; z = g.z - grav.z;
+  }
+  if (Math.hypot(x, y, z) < SHAKE_JOLT) return;
+  const now = performance.now();
+  lastJolt = now;
+  if (shakeHeld) return;
+  jolts = jolts.filter(t => now - t < SHAKE_WINDOW);
+  jolts.push(now);
+  if (jolts.length < SHAKE_JOLTS) return;
+  if ($('viewRun').classList.contains('hidden') || document.querySelector('dialog[open]') || rolling || pressing || !current) return;
+  jolts = [];
+  shakeHeld = true;
+  onPress();
+  shakeTimer = setInterval(() => {
+    if (performance.now() - lastJolt < SHAKE_QUIET) return;
+    clearInterval(shakeTimer);
+    shakeHeld = false;
+    onRelease();
+  }, 100);
+}
+// Where no permission prompt is needed (e.g. Android), listen straight away.
+if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission !== 'function') enableShake();
 
 // Start: honour ?import=URL
 renderHome();
