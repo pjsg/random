@@ -83,6 +83,7 @@ const TYPES = {
   triangular:  { label: 'Triangular', params: [['min', 'Min', 0], ['mode', 'Most likely', 5], ['max', 'Max', 10], ['decimals', 'Decimal places', 2]] }
 };
 const isIndexed = f => TYPES[f.type].indexed;
+const splitsCommas = f => f.splitCommas ?? !f.markdown; // does a list field's text split on commas as well as newlines?
 
 function decimals(x) {
   const s = String(x);
@@ -109,8 +110,15 @@ function listItems(f) {
   }
   return it;
 }
-function pickWeighted(f) { // index of a choice, chosen in proportion to its weight
-  const { cum, total } = listItems(f);
+// A list's choices with weights from a weight script instead of the "w:" prefixes.
+function scriptedItems(f, weights) {
+  const items = listItems(f).items.map((x, i) => ({ label: x.label, w: weights[i] }));
+  let total = 0;
+  const cum = items.map(x => (total += x.w));
+  return { items, cum, total };
+}
+function pickWeighted(f, it = listItems(f)) { // index of a choice, chosen in proportion to its weight
+  const { cum, total } = it;
   const r = rand01() * total;
   let lo = 0, hi = cum.length - 1;
   while (lo < hi) { const mid = (lo + hi) >> 1; if (cum[mid] > r) hi = mid; else lo = mid + 1; }
@@ -185,11 +193,20 @@ function normalise(raw) {
       case 'list': {
         if (r.markdown === true || r.markdown === 'true') f.markdown = true;
         let vals = r.values;
-        if (typeof vals === 'string') vals = vals.split(f.markdown ? /\n/ : /[\n,]/);
+        // "splitCommas" defaults to on, except for Markdown fields (which used to always split on newlines only).
+        // It is only stored when it differs from that default, so older configs are unchanged.
+        const commas = r.splitCommas == null ? !f.markdown : !(r.splitCommas === false || r.splitCommas === 'false');
+        if (commas === !!f.markdown) f.splitCommas = commas;
+        if (typeof vals === 'string') vals = vals.split(commas ? /[\n,]/ : /\n/);
         if (!Array.isArray(vals)) throw new Error(where + 'values must be a list.');
         f.values = vals.map(v => String(v).trim()).filter(v => v !== '');
         if (!f.values.length) throw new Error(where + 'needs at least one value.');
         f.values.forEach(v => { const m = WEIGHT_RE.exec(v); if (m && Number(m[1]) <= 0) throw new Error(where + `weight in "${v}" must be greater than 0.`); });
+        if (r.weightScript != null && typeof r.weightScript !== 'string') throw new Error(where + 'weightScript must be a string of JavaScript.');
+        if (r.weightScript && r.weightScript.trim()) {
+          if (r.weightScript.length > MAX_SCRIPT_CHARS) throw new Error(where + `weight script is too long (limit ${MAX_SCRIPT_CHARS} characters).`);
+          f.weightScript = r.weightScript.replace(/\s+$/, '');
+        }
         break;
       }
       case 'normal': if (!(f.sd > 0)) throw new Error(where + 'standard deviation must be greater than 0.'); break;
@@ -239,12 +256,12 @@ function signature(cfg) { return JSON.stringify(cfg.fields); }
 // ---------- Generation ----------
 // Pick an unused combination of a group's fields, honouring list weights
 // (a combination's weight is the product of its values' weights). Returns {index, reset}.
-function pickUnused(fs, used) {
+function pickUnused(fs, used, its) { // its[i]: weight table for list field fs[i]
   const sizes = fs.map(fieldSize);
   const total = sizes.reduce((p, s) => p * s, 1);
   let reset = false;
   if (used.size >= total) { used.clear(); reset = true; }
-  const draw = weighted => fs.reduce((idx, f, i) => idx * sizes[i] + (weighted && f.type === 'list' ? pickWeighted(f) : randInt(sizes[i])), 0);
+  const draw = weighted => fs.reduce((idx, f, i) => idx * sizes[i] + (weighted && f.type === 'list' ? pickWeighted(f, its[i]) : randInt(sizes[i])), 0);
 
   // Independent weighted draws, rejecting used combinations, give exactly the weighted distribution over the unused ones.
   const tries = total > 2e6 ? 1e5 : 200;
@@ -259,7 +276,7 @@ function pickUnused(fs, used) {
     let w = 1;
     for (let i = fs.length - 1; i >= 0; i--) {
       const k = n % sizes[i]; n = Math.floor(n / sizes[i]);
-      if (fs[i].type === 'list') w *= listItems(fs[i]).items[k].w;
+      if (fs[i].type === 'list') w *= its[i].items[k].w;
     }
     return w;
   };
@@ -275,13 +292,17 @@ function pickUnused(fs, used) {
   return { index: last, reset };
 }
 
-function generate(cfg, st) {
+// weights[i] (optional) overrides the choice weights of list field i. Returns the values,
+// any notes, and picks[i] = index of the chosen item for list fields.
+function generate(cfg, st, weights = {}) {
   const result = new Array(cfg.fields.length);
+  const picks = new Array(cfg.fields.length).fill(null);
   const notes = [];
   const gs = groupsOf(cfg);
+  const itemsOf = f => { const i = cfg.fields.indexOf(f); return weights[i] ? scriptedItems(f, weights[i]) : listItems(f); };
   for (const [g, fs] of Object.entries(gs)) {
     const used = new Set(st.groups[g] || []);
-    const { index, reset } = pickUnused(fs, used);
+    const { index, reset } = pickUnused(fs, used, fs.map(f => (f.type === 'list' ? itemsOf(f) : null)));
     if (reset) notes.push(`Group "${g}" was exhausted – starting over.`);
     used.add(index);
     st.groups[g] = Array.from(used);
@@ -290,10 +311,129 @@ function generate(cfg, st) {
       const s = fieldSize(fs[i]);
       const k = rem % s; rem = Math.floor(rem / s);
       result[cfg.fields.indexOf(fs[i])] = fieldValue(fs[i], k);
+      if (fs[i].type === 'list') picks[cfg.fields.indexOf(fs[i])] = k;
     }
   }
-  cfg.fields.forEach((f, i) => { if (!f.group) result[i] = randomDisplay(f); });
-  return { values: result, notes };
+  cfg.fields.forEach((f, i) => {
+    if (f.group) return;
+    if (f.type === 'list') { const k = pickWeighted(f, itemsOf(f)); picks[i] = k; result[i] = fieldValue(f, k); }
+    else result[i] = randomDisplay(f);
+  });
+  return { values: result, notes, picks };
+}
+
+// ---------- Weight scripts ----------
+// A list field may have a "weightScript": the body of a JavaScript function called as
+// (items, history) => weights, where items are the choices, history the earlier picks (most recent last),
+// and weights a list of numbers >= 0, one per item. Scripts can come from imported configs, so they run in a
+// Web Worker (no DOM or localStorage) with networking/storage APIs removed and a time limit.
+const MAX_SCRIPT_CHARS = 50000;
+const MAX_SCRIPT_HISTORY = 1000;   // picks remembered per scripted field
+const SCRIPT_TIMEOUT = 1000;       // ms per call
+const WEIGHT_WORKER_SRC = `'use strict';
+(() => {
+  const post = self.postMessage.bind(self);
+  const kill = ['fetch', 'XMLHttpRequest', 'WebSocket', 'WebTransport', 'EventSource', 'importScripts', 'Worker', 'SharedWorker',
+    'indexedDB', 'caches', 'cookieStore', 'BroadcastChannel', 'FileReaderSync', 'postMessage', 'close'];
+  for (let o = self; o && o !== Object.prototype; o = Object.getPrototypeOf(o)) {
+    for (const k of kill) { try { delete o[k]; } catch (e) { /* not deletable */ } }
+  }
+  const fns = new Map();
+  self.addEventListener('message', e => {
+    const { id, src, items, history } = e.data;
+    let fn = fns.get(src);
+    if (!fn) {
+      try { fn = new Function('items', 'history', '"use strict";\\n' + src); }
+      catch (err) { post({ id, error: 'has a syntax error: ' + err.message }); return; }
+      fns.set(src, fn);
+    }
+    let r;
+    try { r = fn.call(undefined, items.slice(), history.slice()); }
+    catch (err) { post({ id, error: 'threw an error: ' + (err && err.message ? err.message : String(err)) }); return; }
+    if (!Array.isArray(r) && !ArrayBuffer.isView(r)) { post({ id, error: 'must return a list of numbers, but returned ' + (r === null ? 'null' : typeof r) + '.' }); return; }
+    post({ id, weights: Array.from(r, x => (typeof x === 'number' ? x : String(x))) });
+  });
+})();`;
+let weightWorker = null, weightWorkerUrl = null, scriptSeq = 0;
+const scriptPending = new Map();
+
+function getWeightWorker() {
+  if (weightWorker) return weightWorker;
+  weightWorkerUrl = weightWorkerUrl || URL.createObjectURL(new Blob([WEIGHT_WORKER_SRC], { type: 'text/javascript' }));
+  const w = weightWorker = new Worker(weightWorkerUrl);
+  w.onmessage = e => {
+    const p = scriptPending.get(e.data && e.data.id);
+    if (!p) return;
+    scriptPending.delete(e.data.id);
+    clearTimeout(p.timer);
+    if (e.data.error) p.reject(new Error(e.data.error)); else p.resolve(e.data.weights);
+  };
+  w.onerror = e => { e.preventDefault(); killWeightWorker('failed: ' + (e.message || 'unknown error')); };
+  return w;
+}
+function killWeightWorker(why) {
+  if (weightWorker) weightWorker.terminate();
+  weightWorker = null;
+  for (const p of scriptPending.values()) { clearTimeout(p.timer); p.reject(new Error(why)); }
+  scriptPending.clear();
+}
+// Run a weight script; resolves with the checked list of weights.
+function runWeightScript(src, items, history) {
+  return new Promise((resolve, reject) => {
+    let w;
+    try { w = getWeightWorker(); } catch (e) { return reject(new Error('could not be run in this browser.')); }
+    const id = ++scriptSeq;
+    const timer = setTimeout(() => killWeightWorker(`took longer than ${SCRIPT_TIMEOUT / 1000} s (is there an endless loop?).`), SCRIPT_TIMEOUT);
+    scriptPending.set(id, {
+      timer, reject,
+      resolve: ws => { try { resolve(checkWeights(ws, items.length)); } catch (e) { reject(e); } }
+    });
+    w.postMessage({ id, src, items, history });
+  });
+}
+function checkWeights(ws, n) {
+  if (ws.length !== n) throw new Error(`returned ${ws.length} weight${ws.length === 1 ? '' : 's'} for ${n} choice${n === 1 ? '' : 's'}.`);
+  ws.forEach((x, i) => {
+    if (typeof x !== 'number' || !Number.isFinite(x) || x < 0) throw new Error(`returned ${JSON.stringify(x)} for choice ${i + 1}; each weight must be a number ≥ 0.`);
+  });
+  if (!ws.some(x => x > 0)) throw new Error('returned all-zero weights; at least one must be greater than 0.');
+  return ws;
+}
+
+// Choice labels and the field's pick history (most recent last) as passed to its script.
+function scriptArgs(f, past) {
+  const items = listItems(f).items.map(x => x.label);
+  return { items, history: (past || []).filter(k => k < items.length).map(k => items[k]) };
+}
+
+// Call the scripts of a config's fields. Returns { [fieldIndex]: weights }; failures fall back to the prefix weights.
+async function scriptWeights(cfg, st, notes) {
+  const out = {};
+  for (const [i, f] of cfg.fields.entries()) {
+    if (!f.weightScript) continue;
+    const { items, history } = scriptArgs(f, st.past && st.past[i]);
+    try { out[i] = await runWeightScript(f.weightScript, items, history); }
+    catch (e) { notes.push(`"${f.name}": weight script ${e.message} Used the normal weights.`); }
+  }
+  return out;
+}
+
+// Check a field's script does the right thing on a few sample histories. Returns the weights for an empty history.
+async function testWeightScript(f) {
+  const items = listItems(f).items.map(x => x.label);
+  const cases = [[], [items[0]], [items[items.length - 1], items[0]], Array.from({ length: 25 }, () => items[randInt(items.length)])];
+  let first = null;
+  for (const h of cases) {
+    try { const w = await runWeightScript(f.weightScript, items, h); first = first || w; }
+    catch (e) { throw new Error(`weight script ${e.message}` + (h.length ? ` (when called with a history of ${h.length} pick${h.length === 1 ? '' : 's'})` : '')); }
+  }
+  return first;
+}
+async function checkScripts(cfg) {
+  for (const [i, f] of cfg.fields.entries()) {
+    if (!f.weightScript) continue;
+    try { await testWeightScript(f); } catch (e) { throw new Error(`Field ${i + 1} (${f.name}): ${e.message}`); }
+  }
 }
 
 // ---------- Markdown (for choices with "markdown": true) ----------
@@ -431,7 +571,7 @@ function openRun(id) {
   current = configs.find(c => c.id === id);
   if (!current) return renderHome();
   const st = loadState(id);
-  if (st.sig !== signature(current)) { st.groups = {}; st.history = []; st.stats = {}; st.mom = {}; st.n = 0; st.sig = signature(current); saveState(id, st); }
+  if (st.sig !== signature(current)) { st.groups = {}; st.history = []; st.past = {}; st.stats = {}; st.mom = {}; st.n = 0; st.sig = signature(current); saveState(id, st); }
   $('runName').textContent = current.name;
   const tiles = $('tiles');
   tiles.textContent = '';
@@ -513,7 +653,8 @@ function renderStats(st) {
       const counts = (st.stats && st.stats[i]) || {};
       const nf = Object.values(counts).reduce((s, c) => s + c, 0);
       // Expected shares don't hold when weighted choices are drawn without replacement.
-      const skewedGroup = f.group && groups[f.group].some(g => g.type === 'list' && listItems(g).items.some(x => x.w !== listItems(g).items[0].w));
+      const scripted = !!f.weightScript || !!f.group && groups[f.group].some(g => g.weightScript);
+      const skewedGroup = scripted || f.group && groups[f.group].some(g => g.type === 'list' && listItems(g).items.some(x => x.w !== listItems(g).items[0].w));
       const data = rows.map(r => ({ ...r, c: counts[r.label] || 0, e: nf * r.p }));
       const scale = Math.max(...data.map(d => Math.max(d.c, skewedGroup ? 0 : d.e))) || 1;
       const wrap = document.createElement('div'); wrap.className = 'bars';
@@ -533,7 +674,8 @@ function renderStats(st) {
       });
       box.append(wrap);
 
-      if (skewedGroup) verdict = { text: 'Expected shares are not shown: weighted choices in a no-repeat group are drawn without replacement.' };
+      if (scripted) verdict = { text: 'Expected shares are not shown: weights come from a weight script.' };
+      else if (skewedGroup) verdict = { text: 'Expected shares are not shown: weighted choices in a no-repeat group are drawn without replacement.' };
       else if (nf < 30) verdict = { text: 'Line on each bar = expected count. Too few samples to judge bias yet.' };
       else {
         // chi-square vs expected; bins with expected count < 5 are pooled (Wilson-Hilferty approximation for the p < 0.01 cutoff)
@@ -613,14 +755,23 @@ function onPress() {
   spin(current);
 }
 
-function onRelease() {
+async function onRelease() {
   if (!pressing) return;
   pressing = false;
   $('genBtn').classList.remove('held');
+  released = performance.now(); // tiles keep spinning until finals is set
   const cfg = current;
+  const scriptNotes = [];
+  const weights = cfg.fields.some(f => f.weightScript) ? await scriptWeights(cfg, loadState(cfg.id), scriptNotes) : {};
   const st = loadState(cfg.id);
   st.sig = signature(cfg);
-  const { values, notes } = generate(cfg, st);
+  const { values, notes, picks } = generate(cfg, st, weights);
+  notes.unshift(...scriptNotes);
+  cfg.fields.forEach((f, i) => {
+    if (!f.weightScript || picks[i] === null) return;
+    st.past = st.past || {};
+    st.past[i] = [...(st.past[i] || []), picks[i]].slice(-MAX_SCRIPT_HISTORY);
+  });
   st.history = [values, ...st.history].slice(0, 50);
   st.stats = st.stats || {};
   st.n = (st.n || 0) + 1;
@@ -632,7 +783,6 @@ function onRelease() {
   });
   saveState(cfg.id, st); // persist immediately so a reload can't replay a value
   finals = { values, st, notes };
-  released = performance.now();
 }
 
 function spin(cfg) {
@@ -739,7 +889,14 @@ function renderFieldEditors() {
       <div class="params grid3"></div>
       <div class="lst">
         <label style="margin-top:10px"><span class="lst-help"></span> Optional weight prefix, e.g. <code>2:Likely</code> and <code>1:Unlikely</code>.<textarea class="f-values" rows="4" placeholder="2:Likely&#10;1:Unlikely"></textarea></label>
-        <label class="check"><input type="checkbox" class="f-md"> Render choices as Markdown (one choice per line). Supports **bold**, *italic*, [links](https://example.com) and colours such as &lt;span style="color:red"&gt;red&lt;/span&gt;.</label>
+        <details class="ws"><summary>Weight script (advanced)</summary>
+          <label>The body of a JavaScript function. <code>items</code> is the list of choices and <code>history</code> lists earlier picks for this field, most recent last.
+            Return a list of weights (numbers ≥ 0), one per choice. These replace the weight prefixes.
+            <textarea class="f-script" rows="6" spellcheck="false" wrap="off" placeholder="// e.g. never repeat the last pick&#10;const last = history[history.length - 1];&#10;return items.map(x => (x === last ? 0 : 1));"></textarea></label>
+          <button class="small test-script">Test script</button>
+        </details>
+        <label class="check"><input type="checkbox" class="f-commas"> Split on commas. Untick to allow commas inside a choice (one choice per line).</label>
+        <label class="check"><input type="checkbox" class="f-md"> Render choices as Markdown. Supports **bold**, *italic*, [links](https://example.com) and colours such as &lt;span style="color:red"&gt;red&lt;/span&gt;.</label>
       </div>`;
     const q = s => w.querySelector(s);
     q('.f-name').value = f.name;
@@ -747,10 +904,35 @@ function renderFieldEditors() {
     q('.f-group').value = f.group || '';
     q('.f-values').value = (f.values || []).join('\n');
     q('.f-md').checked = !!f.markdown;
-    const splitter = () => (f.markdown ? /\n/ : /[\n,]/);
+    if (f.type === 'list') f.splitCommas = splitsCommas(f);
+    q('.f-script').value = f.weightScript || '';
+    q('.ws').open = !!f.weightScript;
+    q('.f-script').oninput = e => { f.weightScript = e.target.value; };
+    q('.f-script').addEventListener('keydown', e => { // Tab indents instead of leaving the box
+      if (e.key !== 'Tab' || e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return;
+      e.preventDefault();
+      e.target.setRangeText('  ', e.target.selectionStart, e.target.selectionEnd, 'end');
+      f.weightScript = e.target.value;
+    });
+    q('.test-script').onclick = async () => {
+      let nf;
+      try { nf = normalise({ name: 'test', fields: [{ ...f, group: '' }] }).fields[0]; } catch (e) { return setMsg($('editMsg'), e.message, 'err'); }
+      if (!nf.weightScript) return setMsg($('editMsg'), 'The weight script is empty.', 'err');
+      setMsg($('editMsg'), 'Testing…');
+      try {
+        const w = await testWeightScript(nf);
+        const show = listItems(nf).items.slice(0, 12).map((x, k) => {
+          const t = nf.markdown ? plainText(x.label) : x.label;
+          return `${t.length > 20 ? t.slice(0, 19) + '…' : t}: ${+w[k].toFixed(4)}`;
+        });
+        setMsg($('editMsg'), `Script OK. Weights with no history: ${show.join(', ')}${w.length > 12 ? ', …' : ''}`, 'ok');
+      } catch (e) { setMsg($('editMsg'), e.message, 'err'); }
+    };
+    const splitter = () => (f.splitCommas ? /[\n,]/ : /\n/);
     const syncMd = () => {
       q('.f-md').checked = !!f.markdown;
-      q('.lst-help').textContent = f.markdown ? 'Choices (one per line).' : 'Choices (one per line, or comma separated).';
+      q('.f-commas').checked = !!f.splitCommas;
+      q('.lst-help').textContent = f.splitCommas ? 'Choices (one per line, or comma separated).' : 'Choices (one per line).';
       q('.f-values').wrap = f.markdown ? 'off' : 'soft'; // long data: URLs stay on one line
     };
     syncMd();
@@ -775,8 +957,14 @@ function renderFieldEditors() {
       renderFieldEditors();
     };
     q('.f-values').oninput = e => f.values = e.target.value.split(splitter());
+    q('.f-commas').onchange = e => {
+      f.splitCommas = e.target.checked;
+      f.values = q('.f-values').value.split(splitter());
+      syncMd();
+    };
     q('.f-md').onchange = e => {
       f.markdown = e.target.checked;
+      if (f.markdown) f.splitCommas = false; // Markdown (links, styles, images) often contains commas
       f.values = q('.f-values').value.split(splitter());
       syncMd();
     };
@@ -787,7 +975,7 @@ function renderFieldEditors() {
       const files = Array.from((dt && dt.files) || []).filter(x => x.type.startsWith('image/'));
       if (!files.length) return; // ordinary text paste/drop
       e.preventDefault();
-      if (!f.markdown) { f.markdown = true; syncMd(); } // images need Markdown (and its newline-only splitting)
+      if (!f.markdown || f.splitCommas) { f.markdown = true; f.splitCommas = false; syncMd(); } // images need Markdown, and data: URLs contain commas
       files.reduce((p, file) => p.then(async () => {
         const url = await imageToDataUrl(file);
         ta.setRangeText(`![image](${url})`, ta.selectionStart, ta.selectionEnd, 'end');
@@ -809,10 +997,17 @@ function renderFieldEditors() {
   ['A', 'B', 'C'].forEach(g => { const o = document.createElement('option'); o.value = g; dl.append(o); });
 }
 
-function onSave() {
+async function onSave() {
   editing.name = $('cfgName').value;
   let cfg;
   try { cfg = normalise(editing); } catch (e) { return setMsg($('editMsg'), e.message, 'err'); }
+  if (cfg.fields.some(f => f.weightScript)) {
+    setMsg($('editMsg'), 'Checking weight scripts…');
+    $('saveBtn').disabled = true;
+    try { await checkScripts(cfg); } catch (e) { return setMsg($('editMsg'), e.message, 'err'); }
+    finally { $('saveBtn').disabled = false; }
+    if ($('viewEdit').classList.contains('hidden')) return; // left the editor while checking
+  }
   cfg.id = editing.id;
   upsert(cfg);
   localStorage.removeItem(stateKey(cfg.id)); // structure may have changed
@@ -857,13 +1052,13 @@ async function fillDefaultSelect() {
 }
 
 // ----- Import / export -----
-function importObject(obj) {
+async function importObject(obj) {
   const arr = Array.isArray(obj) ? obj : [obj];
-  const added = arr.map(o => {
-    const cfg = normalise({ ...o, id: undefined }); // always a fresh id
-    upsert(cfg);
-    return cfg.name;
-  });
+  const cfgs = arr.map(o => normalise({ ...o, id: undefined })); // always a fresh id
+  for (const cfg of cfgs) {
+    try { await checkScripts(cfg); } catch (e) { throw new Error(`"${cfg.name}": ${e.message}`); }
+  }
+  const added = cfgs.map(cfg => { upsert(cfg); return cfg.name; });
   $('newDlg').close();
   renderHome();
   setMsg($('homeMsg'), `Imported: ${added.join(', ')}`, 'ok');
@@ -874,7 +1069,7 @@ async function importFromUrl(url) {
   try {
     const res = await fetch(url);
     if (!res.ok) throw new Error('HTTP ' + res.status);
-    importObject(await res.json());
+    await importObject(await res.json());
   } catch (e) {
     setMsg($('importMsg'), 'Import failed: ' + e.message, 'err');
   }
@@ -930,8 +1125,8 @@ $('exportBtn').onclick = onExport;
 $('closeExport').onclick = () => $('exportDlg').close();
 $('copyBtn').onclick = () => { $('exportText').select(); navigator.clipboard?.writeText($('exportText').value); };
 $('importUrlBtn').onclick = () => { const u = $('importUrl').value.trim(); if (u) importFromUrl(u); };
-$('importTextBtn').onclick = () => {
-  try { importObject(JSON.parse($('importText').value)); $('importText').value = ''; }
+$('importTextBtn').onclick = async () => {
+  try { await importObject(JSON.parse($('importText').value)); $('importText').value = ''; }
   catch (e) { setMsg($('importMsg'), 'Import failed: ' + e.message, 'err'); }
 };
 const isGenKey = e => (e.key === ' ' || e.key === 'Enter') && !$('viewRun').classList.contains('hidden') &&

@@ -48,7 +48,7 @@ Parameters by type:
 | Type | Parameters | Output |
 | --- | --- | --- |
 | `number` | `min`, `max`, `step` (defaults 1, 100, 1) | Uniform over `min`, `min+step`, … ≤ `max` |
-| `list` | `values`: array of strings, or a comma/newline-separated string; optional `markdown` (boolean) | One choice; `"w:Label"` gives it relative weight `w` (> 0, default 1) |
+| `list` | `values`: array of strings, or a comma/newline-separated string; optional `splitCommas` (boolean, default `true`, or `false` when `markdown` is on: whether a string `values` is split on commas as well as newlines); optional `markdown` (boolean); optional `weightScript` (string, see below) | One choice; `"w:Label"` gives it relative weight `w` (> 0, default 1) |
 | `normal` | `mean` (0), `sd` (1, > 0), `decimals` (2) | Bell curve rounded to `decimals` places (0 for integers) |
 | `binomial` | `trials` (10, 1–1000), `p` (0.5) | Number of successes in `trials` tries |
 | `poisson` | `mean` (4, 0–1000) | Count of events, e.g. arrivals per interval |
@@ -60,16 +60,37 @@ A weight prefix is a number then a colon at the start of a choice, so a plain ch
 
 ### Markdown choices
 
-Set `"markdown": true` on a list field (the "Render choices as Markdown" checkbox in the editor) to render each choice as Markdown. In this mode a string `values` is split on newlines only, so choices can contain commas. Supported:
+Set `"markdown": true` on a list field (the "Render choices as Markdown" checkbox in the editor) to render each choice as Markdown. Turning Markdown on also turns off "Split on commas" (`splitCommas`), so choices can contain commas; you can turn it back on. Supported:
 
 - `**bold**`, `*italic*`, `~~strikethrough~~`, `` `code` ``, `# heading`
 - `[links](https://example.com)` (http, https, mailto and tel only; opened in a new tab)
-- A safe subset of HTML for things like colour: `<span style="color:red">Red</span>`. Allowed tags are `a b strong i em u s del code mark small sub sup span br img h1`–`h6`. Allowed style properties are `color`, `background-color`, `font-size`, `font-weight`, `font-style`, `font-family`, `text-decoration`, `text-transform`, `letter-spacing`, `width`, `height` and `vertical-align`. Everything else (scripts, event handlers, `url(...)`) is stripped, so imported configurations can't run code.
+- A safe subset of HTML for things like colour: `<span style="color:red">Red</span>`. Allowed tags are `a b strong i em u s del code mark small sub sup span br img h1`–`h6`. Allowed style properties are `color`, `background-color`, `font-size`, `font-weight`, `font-style`, `font-family`, `text-decoration`, `text-transform`, `letter-spacing`, `width`, `height` and `vertical-align`. Everything else (scripts, event handlers, `url(...)`) is stripped, so choices can't run code. (Weight scripts, below, run in an isolated sandbox.)
 - Images: `![Hearts](https://example.com/hearts.svg)` or `<img src="…" alt="Hearts">`. The `src` may be an `https://` URL, an embedded `data:image/…` URI, or a relative path to a file served with the app (e.g. `images/hearts.svg`). Plain `http://` is refused. Images default to the height of the text; override with `<img … style="height:2em">`. Remote images are fetched without a referrer, but the image host can still see the viewer's IP, so only import configurations you trust. Relative images aren't available offline unless added to the cache list in [sw.js](sw.js).
 
 - Pasting images: paste (or drag and drop) an image file into a list field's choices box and it is inserted as `![image](data:…)`. Raster images are shrunk to at most 256 px and kept under about 300 KB; SVG and GIF are embedded as-is. Pasting turns Markdown on for that field. Embedded images are stored in the configuration itself (browser storage is limited to a few MB in total), so prefer small images.
 
 Weights still work: `3:<span style="color:green">Go</span>`.
+
+### Weight scripts
+
+A list field can compute its weights with JavaScript instead of fixed weight prefixes. Open "Weight script (advanced)" under the field's choices in the editor, or set `weightScript` in the JSON. The script is the body of a function called before each pick with two arguments:
+
+- `items`: the choices, as strings (without any weight prefix).
+- `history`: this field's earlier picks, oldest first and **most recent last** (up to the last 1000).
+
+It must return a list with one number ≥ 0 per item, and at least one must be greater than 0. These weights replace the prefix weights. Example that never repeats the previous pick:
+
+```json
+{ "name": "Colour", "type": "list", "values": ["Red", "Green", "Blue"],
+  "weightScript": "const last = history[history.length - 1];\nreturn items.map(x => (x === last ? 0 : 1));" }
+```
+
+- Saving, importing and the "Test script" button run the script with several sample histories and reject it if it has a syntax error, throws, takes longer than 1 second, or returns the wrong kind of result.
+- If a script fails while rolling, that roll uses the prefix weights and a message says why.
+- Scripts run in a Web Worker with networking and storage APIs removed, so a script from an imported configuration can't read your other configurations or send data anywhere.
+- In a no-repeat group, script weights apply to the combinations not used yet. If only zero-weight combinations remain, one of them is still picked before the group starts over.
+- The statistics panel shows counts but no expected shares for these fields.
+- The pick history is cleared when the configuration is saved.
 
 Example weighted and distribution fields:
 
